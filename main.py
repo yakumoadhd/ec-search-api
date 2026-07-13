@@ -132,7 +132,7 @@ async def fetch_amazon_price_via_searxng(
     # SearXNG に投げる
     result = await search_with_fallback(
         query=amazon_search_url,
-        params={"engines": "google", "language": "ja-JP"},
+        params={},  # エンジン指定なし＝全エンジン（地雷集より）
     )
 
     if not result:
