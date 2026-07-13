@@ -1,0 +1,28 @@
+name: Deploy ec-search-api to Cloud Run
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ec-search-api
+          region: asia-northeast1
+          project_id: ec-price-search
+          source: .
+          env_vars: |
+            YAHOO_CLIENT_ID=${{ secrets.YAHOO_CLIENT_ID }}
+            YAHOO_AFFILIATE_ID=${{ secrets.YAHOO_AFFILIATE_ID }}
+            RAKUTEN_APP_ID=${{ secrets.RAKUTEN_APP_ID }}
+            RAKUTEN_AFFILIATE_ID=${{ secrets.RAKUTEN_AFFILIATE_ID }}
+            OLLAMA_ENDPOINT=${{ secrets.OLLAMA_ENDPOINT }}
