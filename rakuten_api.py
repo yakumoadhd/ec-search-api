@@ -44,9 +44,9 @@ import os
 from typing import Any
 from urllib.parse import urlencode
 
-from pyodide.http import pyfetch
+import aiohttp
 
-from app.models.schemas import MallType, RawItem
+from schemas import MallType, RawItem
 
 logger = logging.getLogger(__name__)
 
@@ -295,39 +295,24 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
 # ──────────────────────────────────────────────
 
 async def _request_search_items(
-    keyword:        str,
+    keyword: str,
     application_id: str,
-    affiliate_id:   str,
-    hits:           int,
-    page:           int,
+    affiliate_id: str,
+    hits: int,
+    page: int,
 ) -> dict[str, Any]:
-    """
-    楽天市場商品検索 API を1回呼び出してレスポンス JSON を返す。
-    Cloudflare Workers ネイティブの pyfetch を使用。
-
-    Args:
-        keyword        : 検索キーワード
-        application_id : 楽天 API アプリ ID
-        affiliate_id   : 楽天アフィリエイト ID
-        hits           : 1ページあたりの取得件数
-        page           : ページ番号
-
-    Returns:
-        API レスポンスの辞書
-
-    Raises:
-        Exception : 4xx / 5xx またはネットワークエラーの場合
-    """
     url = _build_search_url(keyword, application_id, affiliate_id, hits, page)
-    response = await pyfetch(url, method="GET")
-
-    if not response.ok:
-        body_text = await response.string()
-        raise Exception(
-            f"楽天 API エラー: status={response.status} body={body_text[:500]}"
-        )
-
-    return await response.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status != 200:
+                body_text = await response.text()
+                raise Exception(
+                    f"楽天 API エラー: status={response.status} body={body_text[:500]}"
+                )
+            return await response.json()
 
 
 # ──────────────────────────────────────────────
