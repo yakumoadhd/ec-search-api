@@ -6,10 +6,10 @@ rakuten_api.py
 RawItem のリストとして返す。
 
 【設計方針】
-- 認証方式が Amazon SigV4 と異なり、クエリパラメータに applicationId を
-  付与するだけのシンプルな GET リクエストで完結する
-- 非同期 HTTP クライアントに pyodide.http.pyfetch を使用（Cloudflare Workers ネイティブ対応）
-- 機密情報（applicationId / affiliateId）はすべて環境変数から受け取る
+- 認証方式が Amazon SigV4 と異なり、クエリパラメータに applicationId と
+  accessKey を付与するだけのシンプルな GET リクエストで完結する
+- 非同期 HTTP クライアントに aiohttp を使用
+- 機密情報（applicationId / accessKey / affiliateId）はすべて環境変数から受け取る
 
 【楽天ポイント自動計算の仕様】
   楽天の基本ポイントは「1倍 = 購入金額の 1%」という仕組み。
@@ -23,9 +23,10 @@ RawItem のリストとして返す。
       itemPrice=3980, pointRate=5  → floor(3980×5/100)  = 199 ポイント
       itemPrice=3980, pointRate=10 → floor(3980×10/100) = 398 ポイント
 
-【楽天市場商品検索API v2 基本仕様】
-  エンドポイント : https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601
+【楽天市場商品検索API 2026年新基盤仕様】
+  エンドポイント : https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260401
   HTTPメソッド   : GET
+  認証           : applicationId + accessKey（両方必須）
   formatVersion  : 2（Items が配列で返る形式）
   hits 上限      : 30件/リクエスト
   page 上限      : 100ページ
@@ -57,43 +58,46 @@ logger = logging.getLogger(__name__)
 _RAKUTEN_API_BASE = (
     "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260401"
 )
-_MAX_HITS_PER_REQ = 30      # API の 1リクエストあたり最大件数
-_MAX_PAGE         = 100     # API のページ番号上限
-_FORMAT_VERSION   = 2       # Items が配列で返るバージョン（推奨）
-
-# 関連度順で取得（最安値順にはせず、後段の sorter に委ねる）
-_DEFAULT_SORT = "standard"
+_MAX_HITS_PER_REQ = 30
+_MAX_PAGE         = 100
+_FORMAT_VERSION   = 2
+_DEFAULT_SORT     = "standard"
 
 
 # ──────────────────────────────────────────────
 # 環境変数ローダー
 # ──────────────────────────────────────────────
 
-def _load_credentials() -> tuple[str, str]:
+def _load_credentials() -> tuple[str, str, str]:
     """
     環境変数から楽天 API の認証情報を取得する。
 
     環境変数:
         RAKUTEN_APPLICATION_ID : 楽天 API アプリ ID（必須）
-        RAKUTEN_AFFILIATE_ID   : 楽天アフィリエイト ID（任意。
-                                 未設定時はアフィリエイトURLが返らない）
+        RAKUTEN_ACCESS_KEY     : 楽天 API アクセスキー（必須・2026年新基盤から必須）
+        RAKUTEN_AFFILIATE_ID   : 楽天アフィリエイト ID（任意）
 
     Returns:
-        (application_id, affiliate_id) のタプル。
+        (application_id, access_key, affiliate_id) のタプル。
         affiliate_id は未設定なら空文字列。
 
     Raises:
-        EnvironmentError: application_id が未設定の場合
+        EnvironmentError: application_id または access_key が未設定の場合
     """
     application_id = os.environ.get("RAKUTEN_APPLICATION_ID", "")
+    access_key     = os.environ.get("RAKUTEN_ACCESS_KEY", "")
     affiliate_id   = os.environ.get("RAKUTEN_AFFILIATE_ID", "")
 
     if not application_id:
         raise EnvironmentError(
             "楽天 API の認証情報が未設定です: RAKUTEN_APPLICATION_ID"
         )
+    if not access_key:
+        raise EnvironmentError(
+            "楽天 API の認証情報が未設定です: RAKUTEN_ACCESS_KEY"
+        )
 
-    return application_id, affiliate_id
+    return application_id, access_key, affiliate_id
 
 
 # ──────────────────────────────────────────────
@@ -135,6 +139,7 @@ def _calculate_point(price: int, point_rate: int) -> float:
 def _build_search_url(
     keyword:        str,
     application_id: str,
+    access_key:     str,
     affiliate_id:   str,
     hits:           int,
     page:           int,
@@ -145,6 +150,7 @@ def _build_search_url(
     Args:
         keyword        : 検索キーワード
         application_id : 楽天 API アプリ ID
+        access_key     : 楽天 API アクセスキー（2026年新基盤から必須）
         affiliate_id   : 楽天アフィリエイト ID（空文字列の場合はパラメータ省略）
         hits           : 1ページあたりの取得件数（1〜30）
         page           : ページ番号（1〜100）
@@ -154,6 +160,7 @@ def _build_search_url(
     """
     params: dict[str, Any] = {
         "applicationId": application_id,
+        "accessKey":     access_key,
         "keyword":       keyword,
         "hits":          hits,
         "page":          page,
@@ -183,33 +190,17 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
 
     Returns:
         RawItem または None
-
-    【フィールドマッピング詳細】
-        itemCode     → item_id   （"shopCode:itemId" 形式）
-        itemName     → raw_name
-        itemPrice    → price     （税込整数）
-        itemUrl      → url       （アフィリエイトURL未使用時。affiliate_recomposer で変換）
-        postageFlag  → shipping_fee（一律 0 ※仕様コメント参照）
-        pointRate    → point     （_calculate_point で円換算）
-        0 固定       → coupon_discount（商品検索APIでは取得不可）
-        mediumImageUrls[0] → image_url
-        shopName     → seller_name
-        reviewCount  → review_count
-        reviewAverage → review_score
     """
-    # ── 必須フィールド: 商品コード ──
     item_code: str = item.get("itemCode", "")
     if not item_code:
         logger.debug("itemCode が取得できなかったアイテムをスキップします")
         return None
 
-    # ── 必須フィールド: 商品名 ──
     raw_name: str = item.get("itemName", "")
     if not raw_name:
         logger.debug("itemName が取得できなかったアイテムをスキップします: code=%s", item_code)
         return None
 
-    # ── 必須フィールド: 価格 ──
     try:
         price = int(item["itemPrice"])
     except (KeyError, TypeError, ValueError):
@@ -219,44 +210,31 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
         logger.debug("有効な価格がないアイテムをスキップします: code=%s", item_code)
         return None
 
-    # ── ポイント計算 ──
-    # pointRate が未取得・不正値の場合は 1（通常倍率）にフォールバック
     try:
         point_rate = int(item.get("pointRate", 1) or 1)
     except (TypeError, ValueError):
         point_rate = 1
     point = _calculate_point(price, point_rate)
 
-    # ── 商品URL ──
-    # affiliateUrl が存在する場合はそちらを優先して格納する。
-    # affiliate_recomposer での再合成が前提だが、
-    # すでにアフィリエイトタグ付きの URL が返ってくれる場合は活用する。
     url: str = (
         item.get("affiliateUrl")
         or item.get("itemUrl")
         or f"https://item.rakuten.co.jp/{item_code}/"
     )
 
-    # ── 送料フラグ ──
-    # 楽天 API は送料の具体的な金額を返さないため一律 0 とする。
-    # postageFlag=1（送料別）の場合も、後続モジュールでの補完を前提に 0 固定。
     shipping_fee = 0
 
-    # ── 商品画像URL ──
     image_url: str | None = None
     try:
         medium_images = item.get("mediumImageUrls", [])
         if medium_images:
-            # mediumImageUrls は [{"imageUrl": "..."}, ...] の形式
             first = medium_images[0]
             image_url = first.get("imageUrl") if isinstance(first, dict) else str(first)
     except (IndexError, TypeError):
         pass
 
-    # ── 出品者（ショップ）名 ──
     seller_name: str | None = item.get("shopName") or None
 
-    # ── レビュー情報 ──
     review_count: int | None = None
     review_score: float | None = None
     try:
@@ -269,7 +247,6 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
         ra = item.get("reviewAverage")
         if ra is not None:
             score = float(ra)
-            # レビュー件数が 0 のとき reviewAverage が 0.0 で返ることがあるため除外
             review_score = score if score > 0.0 else None
     except (TypeError, ValueError):
         pass
@@ -282,7 +259,7 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
         price           = price,
         shipping_fee    = shipping_fee,
         point           = point,
-        coupon_discount = 0,            # 商品検索 API では取得不可のため 0 固定
+        coupon_discount = 0,
         image_url       = image_url,
         seller_name     = seller_name,
         review_count    = review_count,
@@ -295,13 +272,14 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
 # ──────────────────────────────────────────────
 
 async def _request_search_items(
-    keyword: str,
+    keyword:        str,
     application_id: str,
-    affiliate_id: str,
-    hits: int,
-    page: int,
+    access_key:     str,
+    affiliate_id:   str,
+    hits:           int,
+    page:           int,
 ) -> dict[str, Any]:
-    url = _build_search_url(keyword, application_id, affiliate_id, hits, page)
+    url = _build_search_url(keyword, application_id, access_key, affiliate_id, hits, page)
     async with aiohttp.ClientSession() as session:
         async with session.get(
             url,
@@ -326,67 +304,62 @@ async def fetch_rakuten_items(
     """
     楽天市場商品検索 API でキーワード検索を行い、RawItem のリストを返す。
 
-    楽天 API は1リクエストで最大 30件しか返せないため、
-    limit が 30 を超える場合は複数ページにわたってリクエストし、
-    結果を結合して返す。
-
     Args:
         keyword : 検索キーワード（例: "スーパードライ"）
-        limit   : 取得したい最大件数（楽天 API 上限: 30件/ページ × 100ページ）
+        limit   : 取得したい最大件数
 
     Returns:
         RawItem のリスト。価格情報がない商品は除外済み。
 
     Raises:
-        EnvironmentError     : 認証情報の環境変数が未設定の場合
-        Exception: APIからエラーレスポンスが返った場合またはネットワークエラーの場合
+        EnvironmentError : 認証情報の環境変数が未設定の場合
+        Exception        : APIからエラーレスポンスが返った場合またはネットワークエラーの場合
     """
-    application_id, affiliate_id = _load_credentials()
+    application_id, access_key, affiliate_id = _load_credentials()
 
     results:   list[RawItem] = []
     remaining: int           = limit
     page:      int           = 1
 
     while remaining > 0 and page <= _MAX_PAGE:
-            hits = min(remaining, _MAX_HITS_PER_REQ)
+        hits = min(remaining, _MAX_HITS_PER_REQ)
 
-            try:
-                response_json = await _request_search_items(
-                    keyword        = keyword,
-                    application_id = application_id,
-                    affiliate_id   = affiliate_id,
-                    hits           = hits,
-                    page           = page,
-                )
-            except Exception as exc:
-                logger.error("楽天 API リクエストエラー: %s", exc)
-                break
-
-            # Items 取り出し（formatVersion=2 では配列で返る）
-            items_raw: list[dict] = response_json.get("Items", [])
-
-            if not items_raw:
-                logger.debug("page=%d: 取得アイテム数 0。検索終了。", page)
-                break
-
-            for item_raw in items_raw:
-                raw_item = _parse_item(item_raw)
-                if raw_item is not None:
-                    results.append(raw_item)
-
-            logger.debug(
-                "page=%d: %d件取得（有効: %d件）",
-                page, len(items_raw), len(results),
+        try:
+            response_json = await _request_search_items(
+                keyword        = keyword,
+                application_id = application_id,
+                access_key     = access_key,
+                affiliate_id   = affiliate_id,
+                hits           = hits,
+                page           = page,
             )
+        except Exception as exc:
+            logger.error("楽天 API リクエストエラー: %s", exc)
+            break
 
-            remaining -= hits
-            page      += 1
+        items_raw: list[dict] = response_json.get("Items", [])
 
-            # API が返す総ページ数を超えたら早期終了
-            total_page_count: int = response_json.get("pageCount", 1)
-            if page > total_page_count:
-                logger.debug("総ページ数 %d に到達。検索終了。", total_page_count)
-                break
+        if not items_raw:
+            logger.debug("page=%d: 取得アイテム数 0。検索終了。", page)
+            break
+
+        for item_raw in items_raw:
+            raw_item = _parse_item(item_raw)
+            if raw_item is not None:
+                results.append(raw_item)
+
+        logger.debug(
+            "page=%d: %d件取得（有効: %d件）",
+            page, len(items_raw), len(results),
+        )
+
+        remaining -= hits
+        page      += 1
+
+        total_page_count: int = response_json.get("pageCount", 1)
+        if page > total_page_count:
+            logger.debug("総ページ数 %d に到達。検索終了。", total_page_count)
+            break
 
     logger.info(
         "fetch_rakuten_items 完了: keyword='%s' 取得件数=%d", keyword, len(results)
