@@ -24,7 +24,7 @@ RawItem のリストとして返す。
       itemPrice=3980, pointRate=10 → floor(3980×10/100) = 398 ポイント
 
 【楽天市場商品検索API 2026年新基盤仕様】
-  エンドポイント : https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260401
+  エンドポイント : https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701
   HTTPメソッド   : GET
   認証           : applicationId + accessKey（両方必須）
   formatVersion  : 2（Items が配列で返る形式）
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 
 _RAKUTEN_API_BASE = (
-    "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260401"
+    "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701"
 )
 _MAX_HITS_PER_REQ = 30
 _MAX_PAGE         = 100
