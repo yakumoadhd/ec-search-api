@@ -46,9 +46,9 @@ import os
 from typing import Any
 from urllib.parse import urlencode
 
-from pyodide.http import pyfetch
+import aiohttp
 
-from app.models.schemas import MallType, RawItem
+from schemas import MallType, RawItem
 
 logger = logging.getLogger(__name__)
 
@@ -328,41 +328,25 @@ def _parse_item(item: dict[str, Any]) -> RawItem | None:
 # ──────────────────────────────────────────────
 
 async def _request_search_items(
-    keyword:        str,
-    client_id:      str,
+    keyword: str,
+    client_id: str,
     affiliate_type: str,
-    affiliate_id:   str,
-    hits:           int,
-    start:          int,
+    affiliate_id: str,
+    hits: int,
+    start: int,
 ) -> dict[str, Any]:
-    """
-    Yahoo!ショッピング商品検索 API を1回呼び出してレスポンス JSON を返す。
-    Cloudflare Workers ネイティブの pyfetch を使用。
-
-    Args:
-        keyword        : 検索キーワード
-        client_id      : Yahoo! API アプリケーションID
-        affiliate_type : アフィリエイトタイプ
-        affiliate_id   : バリューコマース アフィリエイトID
-        hits           : 1リクエストあたりの取得件数
-        start          : 取得開始インデックス（1始まり）
-
-    Returns:
-        API レスポンスの辞書
-
-    Raises:
-        Exception : 4xx / 5xx またはネットワークエラーの場合
-    """
     url = _build_search_url(keyword, client_id, affiliate_type, affiliate_id, hits, start)
-    response = await pyfetch(url, method="GET")
-
-    if not response.ok:
-        body_text = await response.string()
-        raise Exception(
-            f"Yahoo! API エラー: status={response.status} body={body_text[:500]}"
-        )
-
-    return await response.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status != 200:
+                body_text = await response.text()
+                raise Exception(
+                    f"Yahoo! API エラー: status={response.status} body={body_text[:500]}"
+                )
+            return await response.json()
 
 
 # ──────────────────────────────────────────────
