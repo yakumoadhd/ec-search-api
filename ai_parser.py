@@ -35,7 +35,7 @@ from typing import Any
 
 import aiohttp
 
-from app.models.schemas import ParsedItem
+from schemas import ParsedItem
 
 logger = logging.getLogger(__name__)
 
