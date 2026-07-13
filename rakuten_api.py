@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 
 _RAKUTEN_API_BASE = (
-    "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601"
+    "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260401"
 )
 _MAX_HITS_PER_REQ = 30      # API の 1リクエストあたり最大件数
 _MAX_PAGE         = 100     # API のページ番号上限
