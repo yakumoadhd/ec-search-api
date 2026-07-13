@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 
-from app.models.schemas import ParsedItem, PricedItem, UnitPrice
+from schemas import ParsedItem, PricedItem, UnitPrice
 
 logger = logging.getLogger(__name__)
 
