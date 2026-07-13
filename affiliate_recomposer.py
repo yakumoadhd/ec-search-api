@@ -48,7 +48,7 @@ import logging
 import os
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 
-from app.models.schemas import AffiliateItem, MallType, PricedItem
+from schemas import AffiliateItem, MallType, PricedItem
 
 logger = logging.getLogger(__name__)
 
