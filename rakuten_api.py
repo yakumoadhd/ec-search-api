@@ -337,7 +337,7 @@ async def fetch_rakuten_items(
             logger.error("楽天 API リクエストエラー: %s", exc)
             break
 
-        items_raw: list[dict] = response_json.get("Items", [])
+        items_raw: list[dict] = response_json.get("items", [])
 
         if not items_raw:
             logger.debug("page=%d: 取得アイテム数 0。検索終了。", page)
