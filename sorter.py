@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 
-from app.models.schemas import PricedItem
+from schemas import PricedItem
 
 logger = logging.getLogger(__name__)
 
