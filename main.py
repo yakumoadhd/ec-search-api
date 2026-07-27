@@ -48,6 +48,13 @@ from searxng_client import search_with_fallback
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+import sentry_sdk
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    traces_sample_rate=1.0,
+)
+
 app = FastAPI(title="Price Ranking API", version="8.01")
 
 app.add_middleware(
