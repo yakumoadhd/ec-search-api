@@ -1,21 +1,21 @@
 """
-main.py - FastAPI メインエントリーポイント【v8.01】
+main.py - FastAPI メインエントリーポイント【v8.02】
 
 【アーキテクチャ】
   ユーザー → Cloud Run（このファイル）
               ├─ Yahoo API（並列）
               ├─ 楽天 API（並列）
-              ├─ SearXNG → Amazon価格取得
+              ├─ Amazon価格取得（Creators API ↔ SearXNGフォールバック）
               └─ ヨドバシ 検索URLリンク生成
 
 【処理フロー】
   1. Yahoo/楽天 API を asyncio.gather で並列取得
   2. regex_parser で容量・入数を正規化
-  3. ai_parser（Ollama）で補完（regex失敗分のみ）
+  3. ai_parser（Groq）で補完（regex失敗分のみ）
   4. calculator で単価計算
   5. sorter でソート
   6. affiliate_recomposer でアフィリエイトURL合成
-  7. SearXNG で Amazon価格取得（並列）
+  7. Amazon価格取得（Creators API & SearXNG 同時発火 → フォールバック）
   8. ヨドバシ 検索URLを生成して追加
   9. レスポンス返却
 """
@@ -44,6 +44,7 @@ from affiliate_recomposer import recompose_affiliate_urls
 from yahoo_api import fetch_yahoo_items
 from rakuten_api import fetch_rakuten_items
 from searxng_client import search_with_fallback
+from amazon_api import fetch_amazon_result  # Creators API stub (CLA-226)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ sentry_sdk.init(
     traces_sample_rate=1.0,
 )
 
-app = FastAPI(title="Price Ranking API", version="8.01")
+app = FastAPI(title="Price Ranking API", version="8.02")
 
 app.add_middleware(
     CORSMiddleware,
@@ -75,6 +76,10 @@ SEARXNG_ENDPOINTS = [
     "http://161.33.140.166:8080",   # Oracle VM（メイン）
     "https://civic-marilin-ggvss-a16849cf.koyeb.app",  # Koyeb（サブ）
 ]
+
+# Amazon Creators API フラグ
+# qualifying sales 10件達成後に Cloud Run 環境変数 AMAZON_CREATORS_ENABLED=true で有効化
+AMAZON_CREATORS_ENABLED = os.environ.get("AMAZON_CREATORS_ENABLED", "false").lower() == "true"
 
 # ──────────────────────────────────────────────
 # Amazon価格抽出（SearXNG経由）
@@ -105,22 +110,7 @@ async def fetch_amazon_price_via_searxng(
 ) -> Optional[dict[str, Any]]:
     """
     SearXNG を使って Amazon の価格をスニペットから取得する。
-
-    Step 2-6 実装：
-      1. 容量・入数情報を付加した検索クエリを生成
-      2. Amazon 検索 URL を SearXNG に投げる
-      3. スニペットから /[¥￥][\s]?([\d,]+)/ で価格抽出
-      4. アフィリエイトタグ付き Amazon 検索 URL を生成して返す
-
-    Returns:
-        {
-            "price": int,           # 抽出した価格
-            "affiliate_url": str,   # Amazon検索URL（アフィリタグ付き）
-            "mall": "amazon",
-        }
-        or None（価格取得失敗時）
     """
-    # 検索クエリ生成（容量・入数を付加して精度向上）
     parts = [query]
     if capacity_ml is not None:
         if capacity_ml >= 1000 and capacity_ml % 1000 == 0:
@@ -136,17 +126,15 @@ async def fetch_amazon_price_via_searxng(
         f"&tag={AMAZON_AFFILIATE_TAG}"
     )
 
-    # SearXNG に投げる
     result = await search_with_fallback(
         query=amazon_search_url,
-        params={},  # エンジン指定なし＝全エンジン（地雷集より）
+        params={},
     )
 
     if not result:
         logger.warning("SearXNG: 全エンドポイント失敗 query='%s'", amazon_query)
         return None
 
-    # スニペットから価格抽出（上位5件を探索）
     items = result.get("data", {}).get("results", [])
     for item in items[:5]:
         snippet = item.get("content", "") or item.get("title", "")
@@ -181,7 +169,7 @@ def build_yodobashi_result(query: str) -> dict[str, Any]:
         "price": None,
         "affiliate_url": url,
         "raw_name": f"ヨドバシ: {query}（価格は要確認）",
-        "price_unconfirmed": True,  # フロント側で「要確認」バッジ表示用
+        "price_unconfirmed": True,
     }
 
 
@@ -192,21 +180,8 @@ def build_yodobashi_result(query: str) -> dict[str, Any]:
 @app.get("/search")
 async def search(q: str, limit: int = 30) -> JSONResponse:
     """
-    商品名でYahoo・楽天・Amazon（SearXNG）・ヨドバシを横断検索して
+    商品名でYahoo・楽天・Amazon・ヨドバシを横断検索して
     単価順にソートした結果を返す。
-
-    Args:
-        q     : 検索キーワード（例: コカコーラ 350ml）
-        limit : 取得件数上限（デフォルト30）
-
-    Returns:
-        {
-            "query": str,
-            "items": [...],         # Yahoo・楽天の結果（単価順）
-            "amazon": {...} | null, # SearXNG経由のAmazon結果
-            "yodobashi": {...},     # ヨドバシリンク（要確認）
-            "total": int,
-        }
     """
     if not q or not q.strip():
         return JSONResponse({"error": "クエリが空です"}, status_code=400)
@@ -225,7 +200,6 @@ async def search(q: str, limit: int = 30) -> JSONResponse:
         logger.error("API並列取得エラー: %s", exc)
         yahoo_items, rakuten_items = [], []
 
-    # gather が例外を返した場合は空リストに置き換え
     if isinstance(yahoo_items, Exception):
         logger.error("Yahoo API エラー: %s", yahoo_items)
         yahoo_items = []
@@ -239,7 +213,7 @@ async def search(q: str, limit: int = 30) -> JSONResponse:
     # ── Step 2: 容量・入数 正規化（regex_parser）──
     parsed_items = parse_items_with_regex(raw_items)
 
-    # ── Step 3: Ollama で補完（regex失敗分のみ・エコ設計）──
+    # ── Step 3: AI で補完（regex失敗分のみ）──
     parsed_items = await parse_items_with_ai(parsed_items)
 
     # ── Step 4: 単価計算 ──
@@ -251,8 +225,7 @@ async def search(q: str, limit: int = 30) -> JSONResponse:
     # ── Step 6: アフィリエイトURL合成 ──
     affiliate_items = recompose_affiliate_urls(sorted_items)
 
-    # ── Step 7: SearXNG → Amazon価格取得（並列・非同期）──
-    # 最もマッチしそうなアイテムの容量・入数を使って精度向上
+    # ── Step 7: Amazon価格取得（Creators API & SearXNG 同時発火）──
     best_capacity = next(
         (i.capacity_ml for i in parsed_items if i.capacity_ml is not None), None
     )
@@ -260,11 +233,41 @@ async def search(q: str, limit: int = 30) -> JSONResponse:
         (i.quantity for i in parsed_items if i.quantity > 1), 1
     )
 
-    amazon_result = await fetch_amazon_price_via_searxng(
-        query=query,
-        capacity_ml=best_capacity,
-        quantity=best_quantity,
+    creators_result, searxng_result = await asyncio.gather(
+        fetch_amazon_result(
+            query=query,
+            capacity_ml=best_capacity,
+            quantity=best_quantity,
+        ),
+        fetch_amazon_price_via_searxng(
+            query=query,
+            capacity_ml=best_capacity,
+            quantity=best_quantity,
+        ),
+        return_exceptions=True,
     )
+
+    # 例外はNoneに変換
+    if isinstance(creators_result, Exception):
+        logger.error("Creators API エラー: %s", creators_result)
+        creators_result = None
+    if isinstance(searxng_result, Exception):
+        logger.error("SearXNG エラー: %s", searxng_result)
+        searxng_result = None
+
+    # フォールバック判定:
+    #   Creators API 1件以上 → 採用
+    #   Creators API 空・エラー → SearXNG採用
+    #   両方空 → URLリンクのみ（amazon_result = None）
+    if creators_result is not None:
+        amazon_result = creators_result
+        logger.info("Amazon: Creators API採用")
+    elif searxng_result is not None:
+        amazon_result = searxng_result
+        logger.info("Amazon: SearXNGフォールバック採用")
+    else:
+        amazon_result = None
+        logger.warning("Amazon: 両API失敗 → URLリンクのみ")
 
     # ── Step 8: ヨドバシリンク生成 ──
     yodobashi_result = build_yodobashi_result(query)
@@ -280,10 +283,15 @@ async def search(q: str, limit: int = 30) -> JSONResponse:
             "yahoo_count":   len(yahoo_items),
             "rakuten_count": len(rakuten_items),
             "amazon_found":  amazon_result is not None,
+            "amazon_source": (
+                "creators_api" if creators_result is not None
+                else "searxng" if searxng_result is not None
+                else "none"
+            ),
         },
     })
 
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse({"status": "ok", "version": "8.01"})
+    return JSONResponse({"status": "ok", "version": "8.02"})
