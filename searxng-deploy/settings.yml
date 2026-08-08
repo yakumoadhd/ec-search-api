@@ -1,0 +1,30 @@
+use_default_settings: true
+
+general:
+  instance_name: "SearXNG Sub"
+  debug: false
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+server:
+  secret_key: "yakumo-searxng-s3cr3t-2026-8a7f3d"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+ui:
+  default_locale: ja
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+enabled_plugins:
+  - Basic Calculator
+  - Self Information
+  - Tracker URL remover
