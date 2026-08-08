@@ -1,0 +1,14 @@
+version: "3.7"
+services:
+  searxng:
+    build: .
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
