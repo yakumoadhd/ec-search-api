@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 SEARXNG_ENDPOINTS = [
     {
         "name": "Oracle",
-        "url": "http://161.33.140.166:8080",
+        "url": "http://161.33.140.166:8082",
         "priority": 1,
     },
     {

@@ -295,3 +295,14 @@ async def search(q: str, limit: int = 30) -> JSONResponse:
 @app.get("/health")
 async def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "version": "8.02"})
+
+
+@app.get('/searxng')
+async def searxng_proxy(q: str) -> JSONResponse:
+    """SearXNG プロキシ（CORS対応）- CLA-240"""
+    if not q or not q.strip():
+        return JSONResponse({'error': 'クエリが空です'}, status_code=400)
+    result = await search_with_fallback(q.strip(), params={'format': 'json'})
+    if result is None:
+        return JSONResponse({'error': 'SearXNG全サーバー失敗'}, status_code=503)
+    return JSONResponse(result['data'])
