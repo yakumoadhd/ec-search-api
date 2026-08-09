@@ -1,11 +1,9 @@
 """
 searxng_client.py
-SearXNG 冗長構成クライアント【v9.0 CLA-233対応】
+SearXNG 冗長構成クライアント【v10.0 CLA-233対応】
 
 メイン：Oracle VM (161.33.140.166:8080)
 サブ  ：Render (searxng-main.onrender.com)
-         ※ JSON API有効化は別途対応予定（CLA-XXX）
-         ※ Renderはformat=json未設定のため現状フォールバック専用
 """
 
 import asyncio
@@ -27,9 +25,6 @@ SEARXNG_ENDPOINTS = [
         "url": "https://searxng-main.onrender.com",
         "priority": 2,
     },
-    # GratisVPS / SnapDeploy は URL確定後に追加（CLA-230後続）
-    # {"name": "GratisVPS",  "url": "https://<gratisvps-url>",   "priority": 3},
-    # {"name": "SnapDeploy", "url": "https://<snapdeploy-url>",  "priority": 4},
 ]
 
 TIMEOUT_SEC = 8
