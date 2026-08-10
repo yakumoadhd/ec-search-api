@@ -16,7 +16,7 @@ jobs:
 
       - uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: ec-fastapi
+          service: ec-search-api
           region: asia-northeast1
           project_id: ec-price-search
           source: .
