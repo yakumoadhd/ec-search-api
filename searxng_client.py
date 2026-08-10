@@ -1,9 +1,13 @@
 """
 searxng_client.py
-SearXNG 冗長構成クライアント【v10.0 CLA-233対応】
+SearXNG 冗長構成クライアント【v11.0 CLA-247対応】
 
-メイン：Oracle VM (161.33.140.166:8080)
+メイン：n8n SearXNG Proxy WF (06oeAsMwCSXGpNK3) → Oracle VM (localhost:8082)
 サブ  ：Render (searxng-main.onrender.com)
+
+変更点 (CLA-247):
+  Oracle IP直叩き(161.33.140.166:8082)を廃止
+  → n8n SearXNG Proxy WF経由に変更（Cloud RunからOracle到達不能問題を解消）
 """
 
 import asyncio
@@ -14,15 +18,20 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # ===== SearXNG エンドポイント設定 =====
+# メイン: n8n SearXNG Proxy WF が Oracle VM の localhost:8082 に中継する
+#         WF ID: 06oeAsMwCSXGpNK3
+# サブ:   Render（Cloud Runから直接アクセス可能・スリープ防止WF稼働中）
 SEARXNG_ENDPOINTS = [
     {
-        "name": "Oracle",
-        "url": "http://161.33.140.166:8082",
+        "name": "n8n Proxy (Oracle)",
+        "url": "https://omoikane-1.tail32db64.ts.net/webhook/e37ad53d-0536-44da-9bb1-b1af972c6b2f/searxng-proxy",
+        "append_search_path": False,
         "priority": 1,
     },
     {
         "name": "Render",
         "url": "https://searxng-main.onrender.com",
+        "append_search_path": True,
         "priority": 2,
     },
 ]
@@ -37,7 +46,10 @@ async def _fetch_searxng(
     params: dict,
 ) -> Optional[dict]:
     """単一エンドポイントへリクエスト。失敗時はNoneを返す。"""
-    url = f"{endpoint['url']}/search"
+    if endpoint.get("append_search_path", True):
+        url = f"{endpoint['url']}/search"
+    else:
+        url = endpoint["url"]
     try:
         async with session.get(
             url,
@@ -52,7 +64,7 @@ async def _fetch_searxng(
                 logger.warning("[SearXNG] %s HTTP %d", endpoint["name"], resp.status)
                 return None
     except asyncio.TimeoutError:
-        logger.warning("[SearXNG] %s タイムアウト", endpoint["name"])
+        logger.warning("[SearXNG] %s タイムアだト", endpoint["name"])
         return None
     except Exception as e:
         logger.warning("[SearXNG] %s エラー: %s", endpoint["name"], e)
