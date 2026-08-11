@@ -3,6 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import searxng_client
 import logging
+import sentry_sdk
+import os
+
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN", ""),
+    traces_sample_rate=1.0,
+    send_default_pii=True,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
