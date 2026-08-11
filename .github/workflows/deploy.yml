@@ -1,22 +1,31 @@
 name: Deploy ec-search-api to Cloud Run
-
 on:
   push:
     branches: [main]
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
+      - id: auth
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker --quiet
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t gcr.io/ec-price-search/ec-search-api:${{ github.sha }} .
+          docker push gcr.io/ec-price-search/ec-search-api:${{ github.sha }}
 
       - uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ec-search-api
           region: asia-northeast1
           project_id: ec-price-search
-          source: .
+          image: gcr.io/ec-price-search/ec-search-api:${{ github.sha }}
